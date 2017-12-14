@@ -1,38 +1,66 @@
+import os
 import paramiko
 import socket
 import threading
 from Crypto.Cipher import AES
 import sqlite3
 import json
-import xmltodict
+import untangle
 
-con = sqlite3.connect("system_moniter", check_same_thread=False)
+cwd = os.getcwd()
+
+con = sqlite3.connect("system_moniter.db", check_same_thread=False)
 db_cursor = con.cursor()
 
-# TODO Read config file for ip
-
-client_ip = '10.50.1.185'
-username = "amarpreetsingh"
-password = "amar@661"
-client_file_src = '/home/amarpreetsingh/client/client.py'
+client_file_src = os.path.join(cwd, 'client.py')
 client_file_dest = '/tmp/client.py'
 
-server_ip = '10.50.1.185'
+server_ip = '192.168.1.5'
 server_port = 9999
-paramiko.util.log_to_file("filename.log")
+
+obj = untangle.parse('config.xml')
+for client in obj:
+    print client
+    client_ip = client["ip"]
+    username = client["username"]
+    password = client["password"]
 
 
-# TODO read config
-with open('config.xml') as fd:
-   doc = xmltodict.parse(fd.read())
+class Server(object):
 
-print doc
+    def __init__(self, host, port):
+        self._host = host
+        self._port = port
+
+    def __enter__(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind((self._host, self._port))
+        sock.listen(10)
+        self._sock = sock
+        return self._sock
+
+    def __exit__(self, *exc_info):
+        if exc_info[0]:
+            import traceback
+            traceback.print_exception(*exc_info)
+        self._sock.close()
+
+
+def client_handler(sock):
+    client, address = sock.accept()
+    threading.Thread(target=listenToClient,
+                     args=(client, address)).start()
+
 
 def connect_ssh(client_ip, username, password):
     ssh_client = paramiko.SSHClient()
     ssh_client.load_system_host_keys()
     ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh_client.connect(client_ip, username=username, password=password)
+    ssh_client.connect(client_ip,
+                       username=username,
+                       password=password,
+                       allow_agent=False,
+                       look_for_keys=False)
     return ssh_client
 
 
