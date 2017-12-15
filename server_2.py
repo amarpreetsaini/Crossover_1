@@ -7,6 +7,7 @@ from Crypto.Cipher import AES
 import sqlite3
 import json
 import untangle
+from mail import send_mail_notification
 
 # Create DB connection
 con = sqlite3.connect("system_moniter.db", check_same_thread=False)
@@ -24,7 +25,6 @@ class Server(object):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((self._host, self._port))
         sock.listen(10)
-        print "nListening for incoming connections..."
         self._sock = sock
         return self._sock
 
@@ -34,13 +34,26 @@ class Server(object):
             traceback.print_exception(*exc_info)
         self._sock.close()
 
+    @staticmethod
+    def listenToClient(client, client_ip, memory_alert, cpu_alert, email_id):
+        size = 1024
+        try:
+            data = client.recv(size)
+            if data:
+                decoded_data = json.loads(ClientData.decode(data))
+                ClientData.insert(decoded_data, client_ip)
+                email_alert(decoded_data, memory_alert, cpu_alert, email_id)
+        except:
+            return False
+        client.close()
+
 
 class ClientSetup(object):
 
-    def __init__(self, client_ip, username, password, server_ip, server_port):
-        self.client_ip = client_ip
-        self.username = username
-        self.password = password
+    def __init__(self, client, server_ip, server_port):
+        self.client_ip = client["ip"]
+        self.username = client["username"]
+        self.password = client["password"]
         self.client_file_src = os.path.join(os.getcwd(), 'client.py')
         self.client_file_dest = None
         self.server_ip = server_ip
@@ -88,40 +101,39 @@ class ClientSetup(object):
         self.close_conn()
 
 
-def listenToClient(client, address, client_ip):
-    size = 1024
-    try:
-        data = client.recv(size)
-        if data:
-            decoded_data = json.loads(decode_data(data))
-            insert_data(decoded_data, client_ip)
-    except:
-        return False
-    client.close()
+class ClientData(object):
+    @staticmethod
+    def insert(decoded_data, client_ip):
+        query = "INSERT INTO system_stats " +\
+                "(Ip, Cpu_usage, Mem_usage, Uptime) " +\
+                " VALUES('{}','{}','{}','{}')"\
+                .format(client_ip,
+                        decoded_data['cpu_usage'],
+                        decoded_data['memory_usage'],
+                        decoded_data['uptime'])
+        db_cursor.execute(query)
+        con.commit()
+
+    @staticmethod
+    def decode(raw_data):
+        """
+        """
+        key = "1234567890123456"
+        encryption_suite = AES.new(key, AES.MODE_CBC, 'This is an IV456')
+        cipher_text = encryption_suite.decrypt(raw_data)
+
+        unpad = lambda s: s[0:-ord(s[-1])]
+        decrypted_text = unpad(cipher_text)
+        return decrypted_text
 
 
-def insert_data(decoded_data, client_ip):
-    query = "INSERT INTO system_stats " +\
-            "(Ip, Cpu_usage, Mem_usage, Uptime) " +\
-            " VALUES('{}','{}','{}','{}')"\
-            .format(client_ip,
-                    decoded_data['cpu_usage'],
-                    decoded_data['memory_usage'],
-                    decoded_data['uptime'])
-    db_cursor.execute(query)
-    con.commit()
-
-
-def decode_data(raw_data):
-    """
-    """
-    key = "1234567890123456"
-    encryption_suite = AES.new(key, AES.MODE_CBC, 'This is an IV456')
-    cipher_text = encryption_suite.decrypt(raw_data)
-
-    unpad = lambda s: s[0:-ord(s[-1])]
-    decrypted_text = unpad(cipher_text)
-    return decrypted_text
+def email_alert(data, memory_alert, cpu_alert, email_id):
+    if float(data['memory_usage']) > memory_alert:
+#        data = json.dumps(data)
+        send_mail_notification(data, email_id, 'MEMORY')
+    if float(data['cpu_usage']) > cpu_alert:
+#        data = json.dumps(data)
+        send_mail_notification(data, email_id, 'CPU')
 
 
 if __name__ == '__main__':
@@ -131,18 +143,15 @@ if __name__ == '__main__':
 
     with Server(server_ip, server_port) as sock:
         obj = untangle.parse(os.path.join(os.getcwd(), 'config.xml'))
-        for client in obj.xml.client:
-            client_ip = client["ip"]
-            username = client["username"]
-            password = client["password"]
-
-            client = ClientSetup(client_ip,
-                                 username,
-                                 password,
-                                 server_ip,
-                                 server_port)
+        for client_data in obj.xml.client:
+            client_ip = client_data["ip"]
+            email_id = client_data["mail"]
+            memory_alert = int(client_data.alert[0]["limit"].rstrip('%'))
+            cpu_alert = int(client_data.alert[1]["limit"].rstrip('%'))
+            client = ClientSetup(client_data, server_ip, server_port)
             client.run()
 
-            client_conn, address = sock.accept()
-            threading.Thread(target=listenToClient,
-                             args=(client_conn, address, client_ip)).start()
+            client_conn, _ = sock.accept()
+            threading.Thread(target=Server.listenToClient,
+                             args=(client_conn, client_ip, memory_alert, cpu_alert, email_id)).start()
+            
