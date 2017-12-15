@@ -7,15 +7,15 @@ import psutil
 import json
 import socket
 import time
+import sys
 from datetime import timedelta
 from Crypto.Cipher import AES
 
-# TODO create config
-host = '10.50.1.185'
-port = 9999
-retryAttempts = 5
+# Client configuration
+key = "1234567890123456"
+retryAttempts = 10
 attempt = 1
-client_ip = '10.50.1.118'
+
 
 def collect_stats():
     """
@@ -26,7 +26,6 @@ def collect_stats():
     stats['memory_usage'] = str(psutil.virtual_memory().percent)
     uptime_seconds = time.time() - psutil.boot_time()
     stats['uptime'] = str(timedelta(seconds=uptime_seconds))
-    stats['client_ip'] = str(client_ip)
     stats_json = json.dumps(stats)
     return stats_json
 
@@ -35,10 +34,8 @@ def encrypt_data(raw_data):
     """
     AES Encryption  of raw data for security
     """
-    key = "1234567890123456"
     BS = 16
     pad = lambda s: s + (BS - len(s) % BS) * chr(BS - len(s) % BS) 
-#    pad = lambda s: s + (BS - len(s) % BS) * ' ' 
 
     padded_data = pad(raw_data)
     encryption_suite = AES.new(key, AES.MODE_CBC, 'This is an IV456')
@@ -56,14 +53,20 @@ def send_data(host, port, data):
         client_socket.connect((host, port))
         client_socket.send(data)
         client_socket.close()
-    except socket.error:
+    except Exception as e:
         if attempt < retryAttempts:
             attempt += 1
             send_data(host, port, data)
         else:
-            raise socket.error
+            raise e
+
 
 if __name__ == '__main__':
+
+    server_ip = str(sys.argv[1])
+    server_port = int(sys.argv[2])
+
     raw_stats = collect_stats()
+    print(raw_stats)
     encrypted_data = encrypt_data(raw_stats)
-    send_data(host, port, encrypted_data)
+    send_data(server_ip, server_port, encrypted_data)
